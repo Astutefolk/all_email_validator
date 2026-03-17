@@ -31,6 +31,9 @@ colorama.init(autoreset=True, strip=False)
 # Detect if running on Windows
 IS_WINDOWS = sys.platform == "win32"
 
+# Detect if stdout is a real terminal (not piped/CI)
+IS_TTY = sys.stdout.isatty()
+
 # Enable virtual terminal processing on Windows 10+
 if IS_WINDOWS:
     try:
@@ -172,9 +175,10 @@ class LivePrinter:
             f"│ {Y}ETA {eta:,.0f}s{RS}"
         )
 
-        # write bar, then move cursor back up so next email prints above it
-        sys.stdout.write(f"{CLEAR_LINE}{status}\r\033[A")
-        sys.stdout.flush()
+        if IS_TTY:
+            # write bar, then move cursor back up so next email prints above it
+            sys.stdout.write(f"{CLEAR_LINE}{status}\r\033[A")
+            sys.stdout.flush()
 
     def finish(self) -> None:
         """Print final status bar (no cursor tricks)."""
@@ -287,7 +291,8 @@ def run(
     printer = LivePrinter(len(emails))
 
     print(f"  {G}[*] Initiating scan...{RS}\n")
-    sys.stdout.write(HIDE_CURSOR)
+    if IS_TTY:
+        sys.stdout.write(HIDE_CURSOR)
 
     def _validate_one(idx: int, email: str) -> None:
         r = validate_email(email, do_smtp=do_smtp, cache=cache)
@@ -303,7 +308,8 @@ def run(
             for f in futures:
                 f.result()
     finally:
-        sys.stdout.write(SHOW_CURSOR)
+        if IS_TTY:
+            sys.stdout.write(SHOW_CURSOR)
 
     printer.finish()
     return results, cache
