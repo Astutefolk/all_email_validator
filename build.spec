@@ -2,41 +2,22 @@
 """
 PyInstaller spec file for Astute Email Validator.
 
-Build commands:
-  macOS/Linux:  pyinstaller build.spec
-  Windows:      pyinstaller build.spec
+Build:  pyinstaller build.spec --clean --noconfirm
 """
 
 import sys
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# Collect every dns.* submodule automatically so nothing is missed
+dns_hiddenimports = collect_submodules('dns')
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
     datas=[],
     hiddenimports=[
-        'dns',
-        'dns.resolver',
-        'dns.rdatatype',
-        'dns.name',
-        'dns.exception',
-        'dns.message',
-        'dns.query',
-        'dns.rdata',
-        'dns.rdataclass',
-        'dns.rrset',
-        'dns.zone',
-        'dns.reversename',
-        'dns.inet',
-        'dns.e164',
-        'dns.namedict',
-        'dns.tsigkeyring',
-        'dns.rdtypes',
-        'dns.rdtypes.ANY',
-        'dns.rdtypes.IN',
-        'dns.rdtypes.ANY.MX',
-        'dns.rdtypes.IN.A',
-        'dns.rdtypes.IN.AAAA',
+        *dns_hiddenimports,
         'colorama',
         'validator',
     ],

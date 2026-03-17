@@ -20,16 +20,29 @@ import threading
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 
-from colorama import init as colorama_init, Fore, Style, Back
+import colorama
+from colorama import Fore, Style, Back
 
 from validator import validate_email, ValidationResult, DomainCache, reset_cache
 
-colorama_init(autoreset=True)
+# Enable ANSI escape sequences on Windows CMD/PowerShell
+colorama.init(autoreset=True, strip=False)
+
+# Detect if running on Windows
+IS_WINDOWS = sys.platform == "win32"
+
+# Enable virtual terminal processing on Windows 10+
+if IS_WINDOWS:
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
 
 # ── ANSI helpers ────────────────────────────────────────────────────────────
 
 DIM = "\033[2m"
-BLINK = "\033[5m"
 RESET = "\033[0m"
 HIDE_CURSOR = "\033[?25l"
 SHOW_CURSOR = "\033[?25h"
@@ -296,11 +309,78 @@ def run(
     return results, cache
 
 
+def interactive_mode() -> None:
+    """Called when user double-clicks the .exe with no arguments."""
+    print(f"  {G}{B}[INTERACTIVE MODE]{RS}")
+    print(f"  {GD}Drag & drop your email file here, or type the path:{RS}")
+    print()
+
+    # Get file path
+    file_path = input(f"  {G}>{RS} Email file path: ").strip().strip('"').strip("'")
+    if not file_path:
+        print(f"  {R}[!] No file provided.{RS}")
+        return
+
+    # Get output file
+    out_name = os.path.splitext(os.path.basename(file_path))[0]
+    default_output = f"{out_name}_results.txt"
+    output_input = input(f"  {G}>{RS} Output file [{default_output}]: ").strip().strip('"').strip("'")
+    output_path = output_input if output_input else default_output
+
+    # SMTP?
+    smtp_input = input(f"  {G}>{RS} Enable SMTP check? (y/N): ").strip().lower()
+    do_smtp = smtp_input in ("y", "yes")
+
+    print()
+    run_scan(file_path, output_path, do_smtp=do_smtp, workers=20)
+
+
+def run_scan(
+    file_path: str,
+    output_path: str = "",
+    *,
+    do_smtp: bool = False,
+    workers: int = 20,
+) -> None:
+    """Core scan logic shared by CLI and interactive mode."""
+    emails = load_emails(file_path)
+    count = len(emails)
+
+    if not do_smtp and count > SMTP_AUTO_THRESHOLD:
+        print(f"  {Y}[!] {count:,} targets — SMTP auto-disabled for speed.{RS}")
+        print(f"  {GD}    Use --smtp to force it on.{RS}\n")
+
+    print(f"  {GD}[i] Target file   :{RS} {C}{B}{file_path}{RS}")
+    print(f"  {GD}[i] Emails loaded :{RS} {W}{B}{count:,}{RS}")
+    methods = f"{G}Syntax{RS} . {G}DNS{RS} . {G}MX{RS} . {G}Disposable{RS}"
+    if do_smtp:
+        methods += f" . {G}SMTP{RS}"
+    else:
+        methods += f" . {GD}SMTP off{RS}"
+    print(f"  {GD}[i] Methods       :{RS} {methods}")
+    print(f"  {GD}[i] Threads       :{RS} {W}{B}{workers}{RS}")
+    print(f"  {G}{'─' * 58}{RS}")
+
+    t0 = time.perf_counter()
+    results, cache = run(emails, do_smtp=do_smtp, workers=workers)
+    elapsed = time.perf_counter() - t0
+
+    print_summary(results, elapsed, cache)
+
+    if output_path:
+        write_output_file(output_path, results)
+    else:
+        print(f"  {Y}[i] Tip: use -o results.txt to save results.{RS}")
+
+    print()
+
+
 def cli() -> None:
     parser = argparse.ArgumentParser(
         description="Validate emails from a text file using multiple methods.",
     )
-    parser.add_argument("file", help="Text file with one email per line.")
+    parser.add_argument("file", nargs="?", default=None,
+                        help="Text file with one email per line.")
     smtp_group = parser.add_mutually_exclusive_group()
     smtp_group.add_argument(
         "--no-smtp", action="store_true",
@@ -320,48 +400,45 @@ def cli() -> None:
     )
     args = parser.parse_args()
 
-    # ── banner ──
     print(BANNER)
 
-    emails = load_emails(args.file)
-    count = len(emails)
+    # No file argument → interactive mode (double-clicked .exe)
+    if args.file is None:
+        interactive_mode()
+        return
 
     # Decide SMTP mode
     if args.no_smtp:
         do_smtp = False
     elif args.smtp:
         do_smtp = True
-    elif count > SMTP_AUTO_THRESHOLD:
-        do_smtp = False
-        print(f"  {Y}[!] {count:,} targets — SMTP auto-disabled for speed.{RS}")
-        print(f"  {GD}    Use --smtp to force it on.{RS}\n")
     else:
-        do_smtp = True
+        do_smtp = False  # auto-decide inside run_scan based on count
 
-    print(f"  {GD}[i] Target file   :{RS} {C}{B}{args.file}{RS}")
-    print(f"  {GD}[i] Emails loaded :{RS} {W}{B}{count:,}{RS}")
-    methods = f"{G}Syntax{RS} · {G}DNS{RS} · {G}MX{RS} · {G}Disposable{RS}"
-    if do_smtp:
-        methods += f" · {G}SMTP{RS}"
-    else:
-        methods += f" · {GD}SMTP off{RS}"
-    print(f"  {GD}[i] Methods       :{RS} {methods}")
-    print(f"  {GD}[i] Threads       :{RS} {W}{B}{args.workers}{RS}")
-    print(f"  {G}{'─' * 58}{RS}")
+    run_scan(
+        args.file,
+        args.output or "",
+        do_smtp=do_smtp,
+        workers=args.workers,
+    )
 
-    t0 = time.perf_counter()
-    results, cache = run(emails, do_smtp=do_smtp, workers=args.workers)
-    elapsed = time.perf_counter() - t0
 
-    print_summary(results, elapsed, cache)
-
-    if args.output:
-        write_output_file(args.output, results)
-    else:
-        print(f"  {Y}[i] Tip: use -o results.txt to save results.{RS}")
-
-    print()
+def main() -> None:
+    """Entry point with full error handling for .exe builds."""
+    try:
+        cli()
+    except KeyboardInterrupt:
+        print(f"\n  {Y}[!] Interrupted by user.{RS}")
+    except Exception as exc:
+        print(f"\n  {R}[!] Fatal error: {exc}{RS}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Keep the window open when double-clicked on Windows
+        if IS_WINDOWS and len(sys.argv) <= 1:
+            print()
+            input(f"  {GD}Press Enter to exit...{RS}")
 
 
 if __name__ == "__main__":
-    cli()
+    main()

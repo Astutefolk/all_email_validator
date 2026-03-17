@@ -27,8 +27,12 @@ jobs:
       - name: Build EXE
         run: pyinstaller build.spec --clean --noconfirm
 
-      - name: Test EXE runs
-        run: dist\email_validator.exe --help
+      - name: Test EXE starts
+        shell: cmd
+        run: |
+          echo test@gmail.com > test_emails.txt
+          dist\email_validator.exe test_emails.txt --no-smtp -o test_results.txt
+          type test_results.txt
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v5
